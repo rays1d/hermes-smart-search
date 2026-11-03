@@ -242,8 +242,6 @@ class SmartSearchProvider(WebSearchProvider):
         return True
 
     def search(self, query: str, limit: int = 5) -> Dict[str, Any]:
-        if not _cli_path():
-            return {"success": False, "error": f"smart-search CLI not found; set {_CLI_ENV} or install it"}
         limit = max(1, min(int(limit or 5), 20))
         budget = _budget()
         logger.info("smart-search search: '%s' (limit=%d, budget=%ds)", query, limit, budget)
