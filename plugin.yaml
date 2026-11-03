@@ -1,9 +1,9 @@
-name: web-smartsearch
+name: hermes-smart-search
 version: 1.0.0
 description: "Smart Search bridge — routes Hermes web_search/web_extract through the local smart-search CLI (Exa, Tavily, TinyFish, Firecrawl, AnySearch, Jina, Zhipu …) with smart-search's own intent routing, same-capability fallback and provider cooldown."
 author: rays1d
 license: MIT
-homepage: https://github.com/rays1d/hermes-web-smartsearch
+homepage: https://github.com/rays1d/hermes-smart-search
 tags: [web, search, extract, smart-search, multi-provider]
 kind: backend
 provides_web_providers:

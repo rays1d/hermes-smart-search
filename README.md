@@ -1,4 +1,4 @@
-# hermes-web-smartsearch
+# hermes-smart-search
 
 A Hermes Agent web provider plugin that routes the native `web_search` and
 `web_extract` tools through the local [smart-search](https://github.com/konbakuyomu/smartsearch) CLI.
@@ -32,7 +32,7 @@ plugin change, no Hermes restart.
 ## Install
 
 ```bash
-hermes plugins install rays1d/hermes-web-smartsearch --enable
+hermes plugins install rays1d/hermes-smart-search --enable
 ```
 
 Or drop this directory under `$HERMES_HOME/plugins/web/smartsearch/` and run
