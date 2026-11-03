@@ -25,6 +25,18 @@ plugin change, no Hermes restart.
   smart-search setup           # or: smart-search config set EXA_API_KEY ...
   ```
 
+  If Hermes manages its own Node runtime (`~/.hermes/tools/node-*`), that prefix
+  can be rebuilt by a Hermes update and silently drop globally installed npm
+  packages. Install into a stable prefix instead, then link the bundled native
+  binary (it needs no Node at runtime — swap `linux-arm64` for your platform):
+
+  ```bash
+  npm install -g --prefix /opt/smart-search @konbakuyomu/smart-search@latest
+  ln -sf /opt/smart-search/lib/node_modules/@konbakuyomu/smart-search/node_modules/\
+  @konbakuyomu/smart-search-linux-arm64/runtime/smart-search/smart-search \
+  /usr/local/bin/smart-search
+  ```
+
 - At least one retrieval channel configured in smart-search. A main-search model
   (xAI / OpenAI-compatible) is optional — without it `search` returns sources
   instead of a synthesized answer, which is what an agent wants anyway.
