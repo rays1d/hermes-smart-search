@@ -34,7 +34,30 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from agent.web_search_provider import WebSearchProvider
+try:  # Hermes core (always present when the plugin is loaded by Hermes)
+    from agent.web_search_provider import WebSearchProvider
+except ImportError:  # standalone import: tests, CI, tooling on a bare checkout
+    class WebSearchProvider:  # minimal duck-typed stand-in
+        """Fallback base so the module imports without Hermes installed.
+
+        Hermes always supplies the real ABC; this only keeps linting/tests/CI
+        working on a checkout that has no Hermes tree next to it.
+        """
+
+        def is_available(self) -> bool:
+            return False
+
+        def supports_search(self) -> bool:
+            return True
+
+        def supports_extract(self) -> bool:
+            return False
+
+        def search(self, query: str, limit: int = 5) -> Dict[str, Any]:
+            raise NotImplementedError
+
+        def extract(self, urls: List[str], **kwargs: Any) -> List[Dict[str, Any]]:
+            raise NotImplementedError
 
 logger = logging.getLogger(__name__)
 
