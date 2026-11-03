@@ -63,6 +63,34 @@ runs one `smart-search search`.
 If the CLI fails, Hermes' one-shot keyless rescue still answers that call from
 its built-in free-tier ring, so a broken key never takes search fully offline.
 
+## Deep research tool
+
+The plugin also registers `web_research` in the `web` toolset — a bounded,
+multi-round research loop (search → read the discovered pages → fill evidence
+gaps → cite):
+
+```json
+{"query": "…", "budget": "quick | standard | deep"}
+```
+
+| Budget | Rounds / channels per round | Rough wall time |
+| --- | --- | --- |
+| `quick` | 2 / 1 | ~45 s |
+| `standard` (default) | 3 / 2 | ~2 min |
+| `deep` | 10 / 10 | several minutes |
+
+It returns `{answer, citations, evidence: {status, sufficient, gaps}, providers_used,
+rounds, partial_success, warnings}`. When the evidence bar is not met but findings
+exist, it returns `success: true` with `partial_success: true` and the reason in
+`warnings` — the findings are still usable.
+
+Research synthesis is opt-in inside smart-search: `SMART_SEARCH_JEV_SYNTHESIZE`
+(`false` default, `auto`, `true`) decides whether a separate synthesis model writes
+the final answer. With `auto` it synthesizes only when the evidence warrants it.
+
+The tool appears in new sessions (`hermes gateway restart` or `/new`), since Hermes
+freezes a session's tool list at start to protect prompt caching.
+
 ## Environment variables
 
 | Variable | Default | Meaning |

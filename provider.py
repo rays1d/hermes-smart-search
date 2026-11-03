@@ -67,6 +67,9 @@ _DEFAULT_TIMEOUT = 90
 _MIN_TIMEOUT = 15
 _MAX_TIMEOUT = 300
 
+# Per-call ceilings for `smart-search research` (its own budgets, no --timeout flag).
+_RESEARCH_BUDGETS = {"quick": 120, "standard": 240, "deep": 420}
+
 # No provider list here on purpose: every channel smart-search knows (Exa,
 # Tavily, TinyFish, Firecrawl, AnySearch, Jina, Zhipu, DeepSeek, …) is reached
 # through the CLI, so adding a key in smart-search config needs no change here.
@@ -121,19 +124,28 @@ def _budget() -> int:
     return max(_MIN_TIMEOUT, min(value, _MAX_TIMEOUT))
 
 
-def _run(args: List[str], *, timeout: int) -> Tuple[int, str, str]:
-    """Run the CLI and return ``(exit_code, stdout, stderr)``; never raises."""
+def _run(args: List[str], *, timeout: int, pass_timeout: bool = True) -> Tuple[int, str, str]:
+    """Run the CLI and return ``(exit_code, stdout, stderr)``; never raises.
+
+    ``pass_timeout`` is False for subcommands without a ``--timeout`` flag
+    (``research`` has its own budgets): the budget is handed over as
+    ``SMART_SEARCH_TIMEOUT_SECONDS`` instead.
+    """
     exe = _cli_path()
     if not exe:
         return 127, "", f"smart-search CLI not found (set {_CLI_ENV} or install it)"
-    cmd = _launch_cmd(exe, [*args, "--format", "json", "--timeout", str(timeout)])
+    tail = ["--format", "json", *(["--timeout", str(timeout)] if pass_timeout else [])]
+    cmd = _launch_cmd(exe, [*args, *tail])
+    env = {**os.environ, "NO_COLOR": "1"}
+    if not pass_timeout:
+        env["SMART_SEARCH_TIMEOUT_SECONDS"] = str(timeout)
     try:
         proc = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
             timeout=timeout + 25,
-            env={**os.environ, "NO_COLOR": "1"},
+            env=env,
         )
         return proc.returncode, proc.stdout or "", proc.stderr or ""
     except subprocess.TimeoutExpired:
@@ -300,6 +312,69 @@ class SmartSearchProvider(WebSearchProvider):
             return {"url": url, "title": "", "content": "", "error": "smart-search fetch returned empty content"}
         return {"url": url, "title": "", "content": "", "error": _failure_text(payload, err)}
 
+    def research(self, query: str, budget: str = "standard") -> Dict[str, Any]:
+        """Bounded multi-round research: search → read pages → fill gaps → cite.
+
+        Returns a compact result for the ``web_research`` tool; ``smart-search``
+        keeps the expensive detail in its own evidence files.
+        """
+        budget = str(budget or "standard").strip().lower()
+        if budget not in _RESEARCH_BUDGETS:
+            budget = "standard"
+        logger.info("smart-search research: '%s' (budget=%s)", query, budget)
+        code, out, err = _run(["research", query, "--budget", budget], timeout=_RESEARCH_BUDGETS[budget], pass_timeout=False)
+        payload = _load_json(out)
+        if payload is None:
+            detail = (err or out or "no output").strip()[:600]
+            return {"success": False, "error": f"smart-search research returned no JSON (exit {code}): {detail}"}
+
+        answer = str(payload.get("content") or payload.get("final_answer") or "").strip()
+        ok = bool(payload.get("ok"))
+        if not ok and not answer:
+            return {"success": False, "error": _failure_text(payload, err)}
+
+        evidence = payload.get("evidence_assessment") or {}
+        citations = [
+            {
+                "title": str(c.get("title") or c.get("url") or "").strip(),
+                "url": str(c.get("url") or "").strip(),
+                "provider": str(c.get("provider") or "").strip(),
+            }
+            for c in (payload.get("citations") or [])
+            if isinstance(c, dict) and c.get("url")
+        ]
+        warnings = list(payload.get("warnings") or [])
+        if not ok:
+            # Evidence bar not met (or a phase timed out) but findings exist: hand them
+            # over as a partial result instead of a bare failure the model would retry.
+            reason = str(payload.get("error") or "research ended before the evidence bar was met").strip()
+            err_type = str(payload.get("error_type") or "").strip()
+            warnings.append(f"{err_type}: {reason}" if err_type else reason)
+        return {
+            "success": True,
+            "query": payload.get("query") or query,
+            "budget": payload.get("budget") or budget,
+            "answer": answer,
+            "citations": citations,
+            "evidence": {
+                "status": evidence.get("status"),
+                "sufficient": evidence.get("sufficient"),
+                "gaps": evidence.get("gaps") or [],
+            },
+            "providers_used": payload.get("providers_used") or [],
+            "rounds": len(payload.get("stage_results") or []),
+            "partial_success": (not ok) or bool(payload.get("partial_success")),
+            "warnings": warnings,
+            "elapsed_ms": payload.get("elapsed_ms"),
+        }
+
+    def research_json(self, args: Dict[str, Any]) -> str:
+        """``web_research`` tool handler: JSON string in, JSON string out."""
+        query = str(args.get("query") or "").strip()
+        if not query:
+            return json.dumps({"success": False, "error": "query is required"}, ensure_ascii=False)
+        return json.dumps(self.research(query, str(args.get("budget") or "standard")), ensure_ascii=False)
+
     def get_setup_schema(self) -> Dict[str, Any]:
         return {
             "name": self.display_name,
@@ -308,3 +383,28 @@ class SmartSearchProvider(WebSearchProvider):
                    "(Exa, Tavily, TinyFish, Firecrawl, AnySearch …). Keys live in smart-search config.",
             "env_vars": [],
         }
+
+
+RESEARCH_SCHEMA: Dict[str, Any] = {
+    "name": "web_research",
+    "description": (
+        "Run a bounded multi-round web research task: search, read the discovered pages, fill evidence gaps, "
+        "and return an evidence-backed answer with citations. Much slower and more expensive than web_search "
+        "(tens of seconds up to a few minutes, paid provider quota) — use it for questions that need several "
+        "sources compared or corroborated, not for quick lookups."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "The research question."},
+            "budget": {
+                "type": "string",
+                "enum": ["quick", "standard", "deep"],
+                "description": "Depth ceiling: quick ≈ 2 rounds / ~45s, standard ≈ 3 rounds / ~120s, "
+                               "deep ≈ 10 rounds / several minutes. Default: standard.",
+            },
+        },
+        "required": ["query"],
+    },
+}
+

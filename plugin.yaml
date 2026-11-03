@@ -8,6 +8,8 @@ tags: [web, search, extract, smart-search, multi-provider]
 kind: backend
 provides_web_providers:
   - smartsearch
+provides_tools:
+  - web_research
 requires_env: []
 external_dependencies:
   - "smart-search CLI (npm install -g @konbakuyomu/smart-search)"

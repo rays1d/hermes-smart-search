@@ -22,7 +22,7 @@ def _stub(outputs: dict):
     """Patch ``provider._run`` with canned JSON per verb; return (patch, calls)."""
     calls = []
 
-    def fake_run(args, *, timeout):
+    def fake_run(args, **kwargs):
         calls.append(args)
         return 0, json.dumps(outputs[args[0]]), ""
 
@@ -79,7 +79,7 @@ class SearchMappingTests(_ProviderTest):
         self.assertIn("config_error", out["error"])
 
     def test_no_json_is_reported(self):
-        p._run = lambda args, *, timeout: (1, "", "boom")
+        p._run = lambda args, **kwargs: (1, "", "boom")
         out = self.prov.search("q", 1)
         self.assertFalse(out["success"])
         self.assertIn("boom", out["error"])
@@ -108,6 +108,68 @@ class FetchMappingTests(_ProviderTest):
         docs = self.prov.extract(["https://d.example"])
         self.assertIn("error", docs[0])
         self.assertIn("network_error", docs[0]["error"])
+
+
+class ResearchMappingTests(_ProviderTest):
+    def test_research_result_is_compacted(self):
+        fake, calls = _stub({
+            "research": {
+                "ok": True,
+                "query": "q",
+                "budget": "quick",
+                "content": "evidence-backed findings",
+                "citations": [{"url": "https://a.example", "title": "A", "provider": "tavily"}],
+                "evidence_assessment": {"status": "partial", "sufficient": False, "gaps": ["freshness"]},
+                "providers_used": ["exa", "tavily"],
+                "stage_results": [{}, {}],
+                "partial_success": True,
+                "warnings": [],
+                "elapsed_ms": 1234,
+            }
+        })
+        p._run = fake
+        out = self.prov.research("q", "quick")
+        self.assertTrue(out["success"])
+        self.assertEqual(out["answer"], "evidence-backed findings")
+        self.assertEqual(out["citations"][0]["provider"], "tavily")
+        self.assertEqual(out["evidence"]["status"], "partial")
+        self.assertEqual(out["rounds"], 2)
+        self.assertTrue(out["partial_success"])
+        # research has no --timeout flag: budget goes through the env instead
+        self.assertEqual(calls, [["research", "q", "--budget", "quick"]])
+
+    def test_unknown_budget_falls_back_to_standard(self):
+        fake, calls = _stub({"research": {"ok": True, "content": "x"}})
+        p._run = fake
+        self.prov.research("q", "huge")
+        self.assertEqual(calls[0], ["research", "q", "--budget", "standard"])
+
+    def test_research_failure_without_evidence_is_an_error(self):
+        fake, _ = _stub({"research": {"ok": False, "error_type": "config_error", "error": "no providers"}})
+        p._run = fake
+        out = self.prov.research("q")
+        self.assertFalse(out["success"])
+        self.assertIn("config_error", out["error"])
+
+    def test_research_partial_evidence_is_a_usable_result(self):
+        fake, _ = _stub({
+            "research": {
+                "ok": False,
+                "error_type": "evidence_error",
+                "error": "not enough verified evidence",
+                "content": "partial findings",
+                "citations": [{"url": "https://a.example", "provider": "tavily"}],
+            }
+        })
+        p._run = fake
+        out = self.prov.research("q")
+        self.assertTrue(out["success"])
+        self.assertTrue(out["partial_success"])
+        self.assertEqual(out["answer"], "partial findings")
+        self.assertTrue(any("evidence_error" in w for w in out["warnings"]))
+
+    def test_handler_requires_query(self):
+        self.assertIn("required", self.prov.research_json({}))
 
 
 if __name__ == "__main__":
